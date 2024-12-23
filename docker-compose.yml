@@ -1,0 +1,19 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres
+    container_name: postgres_kv
+    restart: always
+    environment:
+      POSTGRES_USER: kv_admin       
+      POSTGRES_PASSWORD: kv_password 
+      POSTGRES_DB: KV              
+    ports:
+      - "5432:5432"                 
+    volumes:
+      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
+      - postgres_kv_data:/var/lib/postgresql/data 
+
+volumes:
+  postgres_kv_data:
