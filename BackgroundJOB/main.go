@@ -13,7 +13,7 @@ func init() {
 }
 
 func main() {
-	DBURL := "postgres://kv_admin:kv_password@localhost:5432/KV"
+	DBURL := "postgresql://user:password@localhost:5432/postgres"
 
 	pgconn, err := pgx.Connect(context.Background(), DBURL)
 	if err != nil {

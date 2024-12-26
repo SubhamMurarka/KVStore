@@ -1,19 +1,58 @@
-version: '3.9'
+version: '3.8'
+x-postgres-common:
+  &postgres-common
+  image: postgres:14-alpine
+  user: postgres
+  restart: always
+  healthcheck:
+    test: 'pg_isready -U user --dbname=postgres'
+    interval: 10s
+    timeout: 5s
+    retries: 5
 
 services:
-  postgres:
-    image: postgres
-    container_name: postgres_kv
-    restart: always
-    environment:
-      POSTGRES_USER: kv_admin       
-      POSTGRES_PASSWORD: kv_password 
-      POSTGRES_DB: KV              
+  postgres_primary:
+    <<: *postgres-common
     ports:
-      - "5432:5432"                 
+      - 5432:5432
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_DB: postgres
+      POSTGRES_PASSWORD: password
+      POSTGRES_HOST_AUTH_METHOD: "scram-sha-256\nhost replication all 0.0.0.0/0 md5"
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256"
+    command: |
+      postgres 
+      -c wal_level=replica 
+      -c max_wal_senders=10 
+      -c max_replication_slots=10 
+      -c wal_compression=on 
+      -c wal_writer_delay=500ms 
+      -c max_wal_size=1GB 
+      -c checkpoint_completion_target=0.9 
+      -c hot_standby_feedback=off 
+      -c shared_buffers=256MB 
+      -c work_mem=4MB
     volumes:
-      - ./init.sql:/docker-entrypoint-initdb.d/init.sql
-      - postgres_kv_data:/var/lib/postgresql/data 
+      - ./init1.sql:/docker-entrypoint-initdb.d/00_init.sql
 
-volumes:
-  postgres_kv_data:
+  postgres_replica:
+    <<: *postgres-common
+    ports:
+      - 5433:5432
+    environment:
+      PGUSER: replicator
+      PGPASSWORD: replicator_password
+    command: |
+      bash -c "
+      until pg_basebackup --pgdata=/var/lib/postgresql/data -R --slot=replication_slot --host=postgres_primary --port=5432
+      do
+      echo 'Waiting for primary to connect...'
+      sleep 1s
+      done
+      echo 'Backup done, starting replica...'
+      chmod 0700 /var/lib/postgresql/data
+      postgres
+      "
+    depends_on:
+      - postgres_primary

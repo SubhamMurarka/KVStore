@@ -25,12 +25,14 @@ func (h *handler) Put(c *gin.Context) {
 	if err := c.ShouldBindJSON(&ip); err != nil {
 		logrus.Error("Error Binding : ", err)
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
 	}
 
 	err := h.repo.Put(ip)
 	if err != nil {
 		logrus.Error("Not able to PUT : ", err)
 		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
 	}
 
 	logrus.Infof("Success for key %v", ip.Key)
@@ -78,5 +80,26 @@ func (h *handler) Delete(c *gin.Context) {
 	}
 
 	logrus.Infof("Success for key %v", key)
+	c.JSON(http.StatusOK, gin.H{"Success": "OK"})
+}
+
+func (h *handler) Update(c *gin.Context) {
+	var request *models.UpdateRequest
+
+	if err := c.ShouldBindJSON(&request); err != nil {
+		logrus.Error("Error Binding : ", err)
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	err := h.repo.Update(request)
+	if err != nil {
+		logrus.Error("Not able to Update : ", err)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		return
+	}
+
+	logrus.Infof("Success Update for key %v", request.Key)
+
 	c.JSON(http.StatusOK, gin.H{"Success": "OK"})
 }

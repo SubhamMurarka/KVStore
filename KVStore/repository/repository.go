@@ -7,6 +7,7 @@ import (
 
 	"github.com/SubhamMurarka/KVStore/models"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sirupsen/logrus"
 )
 
@@ -14,15 +15,18 @@ type RepoInterface interface {
 	Get(key string) (*models.Request, error)
 	Put(inputObj *models.Request) error
 	Delete(key string) error
+	Update(inputObj *models.UpdateRequest) error
 }
 
 type repo struct {
-	connection *pgx.Conn
+	connectionWrite *pgxpool.Pool
+	connectionRead  *pgxpool.Pool
 }
 
-func NewRepo(conn *pgx.Conn) RepoInterface {
+func NewRepo(connWrite *pgxpool.Pool, connRead *pgxpool.Pool) RepoInterface {
 	return &repo{
-		connection: conn,
+		connectionWrite: connWrite,
+		connectionRead:  connRead,
 	}
 }
 
@@ -38,7 +42,7 @@ func (r *repo) Put(inpObj *models.Request) error {
 			   `
 	start := time.Now()
 
-	op, err := r.connection.Exec(context.Background(), query, key, value, expireAt)
+	op, err := r.connectionWrite.Exec(context.Background(), query, key, value, expireAt)
 
 	duration := time.Since(start)
 
@@ -84,7 +88,7 @@ func (r *repo) Get(key string) (*models.Request, error) {
 	query := `SELECT key, value, expire_at FROM kv_store
               WHERE key = $1 and expire_at > NOW()`
 
-	row := r.connection.QueryRow(context.Background(), query, key)
+	row := r.connectionRead.QueryRow(context.Background(), query, key)
 
 	var expireAt time.Time
 
@@ -116,7 +120,7 @@ func (r *repo) Delete(key string) error {
 
 	start := time.Now()
 
-	op, err := r.connection.Exec(context.Background(), query, key)
+	op, err := r.connectionWrite.Exec(context.Background(), query, key)
 
 	duration := time.Since(start)
 
@@ -128,5 +132,60 @@ func (r *repo) Delete(key string) error {
 	fmt.Println("time taken : ", duration)
 
 	logrus.Infof("Rows deleted for key %s: %d", key, op.RowsAffected())
+	return nil
+}
+
+func (r *repo) Update(inputObj *models.UpdateRequest) error {
+	tx, err := r.connectionWrite.BeginTx(context.Background(), pgx.TxOptions{})
+	if err != nil {
+		logrus.Error("not able to begin transaction : ", err)
+		return err
+	}
+
+	defer tx.Rollback(context.Background())
+
+	query := `SELECT expire_at FROM kv_store 
+			  WHERE key = $1
+			  FOR UPDATE
+			  `
+	var expire_at time.Time
+	err = tx.QueryRow(context.Background(), query, inputObj.Key).Scan(&expire_at)
+
+	if err == pgx.ErrNoRows {
+		logrus.Error("key does not exist : ", inputObj.Key)
+		return fmt.Errorf("key does not exist")
+	}
+
+	if err != nil {
+		logrus.Error("Error querying kv_store : ", err)
+		return err
+	}
+
+	if expire_at.Before(time.Now()) {
+		logrus.Error("Key is expired or not eligible for update, expire_at: ", expire_at)
+		return fmt.Errorf("key is expired or not eligible for update")
+	}
+
+	updateQuery := `
+        UPDATE kv_store
+        SET value = $1
+        WHERE key = $2
+    `
+
+	pgcmd, err := tx.Exec(context.Background(), updateQuery, inputObj.Value, inputObj.Key)
+	if err != nil {
+		logrus.Error("Error updating kv_store: ", err)
+		return err
+	}
+
+	logrus.Info("NO. of rows affected : ", pgcmd.RowsAffected())
+
+	err = tx.Commit(context.Background())
+
+	if err != nil {
+		logrus.Error("Error commiting transaction : ", err)
+		return err
+	}
+
 	return nil
 }
