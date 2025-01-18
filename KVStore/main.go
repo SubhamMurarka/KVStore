@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"strconv"
 
 	"github.com/SubhamMurarka/KVStore/handler"
 	"github.com/SubhamMurarka/KVStore/repository"
@@ -14,33 +15,29 @@ func init() {
 	logrus.SetLevel(logrus.DebugLevel)
 }
 
+var writePool []*pgxpool.Pool
+var readPool []*pgxpool.Pool
+
 func main() {
-	DBWriteURL := "postgresql://user:password@localhost:5432/postgres"
-	DBReadURL := "postgresql://replicator:replicator_password@localhost:5433/postgres" // Replica DB
+	DBShard1 := []string{
+		"postgresql://user:password@localhost:5432/postgres",
+		"postgresql://replicator:replicator_password@localhost:5433/postgres",
+	}
+
+	DBShard2 := []string{
+		"postgresql://user:password@localhost:5434/postgres",
+		"postgresql://replicator:replicator_password@localhost:5435/postgres",
+	}
 
 	// Configure primary (write) connection pool
-	writeConfig, err := pgxpool.ParseConfig(DBWriteURL)
-	if err != nil {
-		logrus.Fatalf("Unable to configure primary database: %v", err)
-	}
 
-	writePool, err := pgxpool.NewWithConfig(context.Background(), writeConfig)
-	if err != nil {
-		logrus.Fatalf("Unable to create write connection pool: %v", err)
-	}
-	defer writePool.Close()
+	connect(DBShard1)
+	connect(DBShard2)
 
-	// Configure replica (read) connection pool
-	readConfig, err := pgxpool.ParseConfig(DBReadURL)
-	if err != nil {
-		logrus.Fatalf("Unable to configure replica database: %v", err)
-	}
-
-	readPool, err := pgxpool.NewWithConfig(context.Background(), readConfig)
-	if err != nil {
-		logrus.Fatalf("Unable to create read connection pool: %v", err)
-	}
-	defer readPool.Close()
+	defer readPool[0].Close()
+	defer readPool[1].Close()
+	defer writePool[0].Close()
+	defer writePool[1].Close()
 
 	repo := repository.NewRepo(writePool, readPool)
 	handle := handler.NewHandler(repo)
@@ -50,22 +47,55 @@ func main() {
 	r.GET("/get", handle.Get)
 	r.DELETE("/delete", handle.Delete)
 	r.PATCH("/update", handle.Update)
-	r.GET("/pool-stats", func(c *gin.Context) {
+	r.GET("/pool-stats:i", func(c *gin.Context) {
+		i, _ := strconv.Atoi(c.Param("i"))
 		c.JSON(200, gin.H{
 			"write_pool": gin.H{
-				"total_conns":    writePool.Stat().TotalConns(),
-				"idle_conns":     writePool.Stat().IdleConns(),
-				"acquired_conns": writePool.Stat().AcquiredConns(),
-				"max_conns":      writePool.Stat().MaxConns(),
+				"total_conns":    writePool[i].Stat().TotalConns(),
+				"idle_conns":     writePool[i].Stat().IdleConns(),
+				"acquired_conns": writePool[i].Stat().AcquiredConns(),
+				"max_conns":      writePool[i].Stat().MaxConns(),
 			},
 			"read_pool": gin.H{
-				"total_conns":    readPool.Stat().TotalConns(),
-				"idle_conns":     readPool.Stat().IdleConns(),
-				"acquired_conns": readPool.Stat().AcquiredConns(),
-				"max_conns":      readPool.Stat().MaxConns(),
+				"total_conns":    readPool[i].Stat().TotalConns(),
+				"idle_conns":     readPool[i].Stat().IdleConns(),
+				"acquired_conns": readPool[i].Stat().AcquiredConns(),
+				"max_conns":      readPool[i].Stat().MaxConns(),
 			},
 		})
 	})
 
 	r.Run("0.0.0.0:8080")
+}
+
+func connect(DBshard []string) {
+	writeConfig, err := pgxpool.ParseConfig(DBshard[0])
+	if err != nil {
+		logrus.Fatalf("Unable to configure primary database: %v", err)
+	}
+
+	writeConfig.MinConns = 5
+	writeConfig.MaxConns = 45
+
+	writepool, err := pgxpool.NewWithConfig(context.Background(), writeConfig)
+	if err != nil {
+		logrus.Fatalf("Unable to create write connection pool: %v", err)
+	}
+	writePool = append(writePool, writepool)
+
+	// Configure replica (read) connection pool
+	readConfig, err := pgxpool.ParseConfig(DBshard[1])
+	if err != nil {
+		logrus.Fatalf("Unable to configure replica database: %v", err)
+	}
+
+	readConfig.MinConns = 5
+	readConfig.MaxConns = 47
+
+	readpool, err := pgxpool.NewWithConfig(context.Background(), readConfig)
+	if err != nil {
+		logrus.Fatalf("Unable to create read connection pool: %v", err)
+	}
+
+	readPool = append(readPool, readpool)
 }

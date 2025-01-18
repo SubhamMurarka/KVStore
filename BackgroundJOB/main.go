@@ -2,20 +2,24 @@ package main
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/sirupsen/logrus"
 )
 
+var wg sync.WaitGroup
+
 func init() {
 	logrus.SetLevel(logrus.DebugLevel)
 }
 
 func main() {
-	DBURL := "postgresql://user:password@localhost:5432/postgres"
+	DBURL1 := "postgresql://user:password@localhost:5432/postgres"
+	DBURL2 := "postgresql://user:password@localhost:5434/postgres"
 
-	pgconn, err := pgx.Connect(context.Background(), DBURL)
+	pgconn, err := pgx.Connect(context.Background(), DBURL1)
 	if err != nil {
 		logrus.Fatal("DB connection refused", err)
 	}
@@ -24,6 +28,15 @@ func main() {
 
 	defer pgconn.Close(context.Background())
 
+	pgconn2, err := pgx.Connect(context.Background(), DBURL2)
+	if err != nil {
+		logrus.Fatal("DB connection refused", err)
+	}
+
+	logrus.Info("DB connected")
+
+	defer pgconn2.Close(context.Background())
+
 	ticker := time.NewTicker(5 * time.Second)
 
 	defer ticker.Stop()
@@ -31,7 +44,15 @@ func main() {
 	for {
 		select {
 		case <-ticker.C:
-			cleanUp(pgconn)
+			wg.Add(2)
+			go func() {
+				defer wg.Done()
+				cleanUp(pgconn)
+			}()
+			go func() {
+				defer wg.Done()
+				cleanUp(pgconn2)
+			}()
 		}
 	}
 }

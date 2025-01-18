@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/sirupsen/logrus"
+	"github.com/spaolacci/murmur3"
 )
 
 type RepoInterface interface {
@@ -19,22 +20,35 @@ type RepoInterface interface {
 }
 
 type repo struct {
-	connectionWrite *pgxpool.Pool
-	connectionRead  *pgxpool.Pool
+	connectionWrite []*pgxpool.Pool
+	connectionRead  []*pgxpool.Pool
 }
 
-func NewRepo(connWrite *pgxpool.Pool, connRead *pgxpool.Pool) RepoInterface {
+func NewRepo(connWrite []*pgxpool.Pool, connRead []*pgxpool.Pool) RepoInterface {
 	return &repo{
 		connectionWrite: connWrite,
 		connectionRead:  connRead,
 	}
 }
 
+func GetShardID(key string) uint32 {
+	hash := murmur3.Sum32([]byte(key))
+
+	// Shard the data based on the hash value
+	numShards := 2
+	shardID := hash % uint32(numShards)
+
+	fmt.Printf("Hash: %d, Shard: %d\n", hash, shardID)
+
+	return shardID
+}
+
 func (r *repo) Put(inpObj *models.Request) error {
 	key := inpObj.Key
+	i := GetShardID(key)
 	value := inpObj.Value
 	expireAt := time.Now().Add(time.Duration(inpObj.TTL) * time.Second).UTC()
-	// expireAt = expireAt.Format("2006-01-02 15:04:05")
+
 	fmt.Println("expiry : ", expireAt)
 	query := `INSERT INTO kv_store(key, value, expire_at)
                VALUES($1, $2, $3)
@@ -42,7 +56,7 @@ func (r *repo) Put(inpObj *models.Request) error {
 			   `
 	start := time.Now()
 
-	op, err := r.connectionWrite.Exec(context.Background(), query, key, value, expireAt)
+	op, err := r.connectionWrite[i].Exec(context.Background(), query, key, value, expireAt)
 
 	duration := time.Since(start)
 
@@ -57,38 +71,14 @@ func (r *repo) Put(inpObj *models.Request) error {
 	return nil
 }
 
-// func (r *repo) Put(inpObj *models.Request) error {
-// 	key := inpObj.Key
-// 	value := inpObj.Value
-// 	expireAt := time.Now().Add(time.Duration(inpObj.TTL) * time.Second)
-
-// 	query := `UPDATE kv_store
-//               SET value = COALESCE($2, kv_store.value),
-//                   expire_at = COALESCE($3, kv_store.expire_at)
-//               WHERE key = $1 and expire_at > NOW();`
-
-// 	op, err := r.connection.Exec(context.Background(), query, key, value, expireAt)
-// 	if err != nil {
-// 		logrus.Error("Error updating: ", err)
-// 		return err
-// 	}
-
-// 	// Check if any rows were affected
-// 	if op.RowsAffected() == 0 {
-// 		return fmt.Errorf("no record found with key: %s", key)
-// 	}
-
-// 	logrus.Infof("Rows affected by Update operation: %d", op.RowsAffected())
-// 	return nil
-// }
-
 func (r *repo) Get(key string) (*models.Request, error) {
+	i := GetShardID(key)
 	kvop := &models.Request{}
 
 	query := `SELECT key, value, expire_at FROM kv_store
               WHERE key = $1 and expire_at > NOW()`
 
-	row := r.connectionRead.QueryRow(context.Background(), query, key)
+	row := r.connectionRead[i].QueryRow(context.Background(), query, key)
 
 	var expireAt time.Time
 
@@ -114,13 +104,15 @@ func (r *repo) Get(key string) (*models.Request, error) {
 }
 
 func (r *repo) Delete(key string) error {
+	i := GetShardID(key)
+
 	query := `UPDATE kv_store
 		SET expire_at = '4713-11-24 00:00:00 BC'
 		WHERE key = $1 AND expire_at > NOW();`
 
 	start := time.Now()
 
-	op, err := r.connectionWrite.Exec(context.Background(), query, key)
+	op, err := r.connectionWrite[i].Exec(context.Background(), query, key)
 
 	duration := time.Since(start)
 
@@ -136,7 +128,10 @@ func (r *repo) Delete(key string) error {
 }
 
 func (r *repo) Update(inputObj *models.UpdateRequest) error {
-	tx, err := r.connectionWrite.BeginTx(context.Background(), pgx.TxOptions{})
+	i := GetShardID(inputObj.Key)
+
+	start := time.Now()
+	tx, err := r.connectionWrite[i].BeginTx(context.Background(), pgx.TxOptions{})
 	if err != nil {
 		logrus.Error("not able to begin transaction : ", err)
 		return err
@@ -149,6 +144,7 @@ func (r *repo) Update(inputObj *models.UpdateRequest) error {
 			  FOR UPDATE
 			  `
 	var expire_at time.Time
+
 	err = tx.QueryRow(context.Background(), query, inputObj.Key).Scan(&expire_at)
 
 	if err == pgx.ErrNoRows {
@@ -181,6 +177,9 @@ func (r *repo) Update(inputObj *models.UpdateRequest) error {
 	logrus.Info("NO. of rows affected : ", pgcmd.RowsAffected())
 
 	err = tx.Commit(context.Background())
+
+	duration := time.Since(start)
+	fmt.Println("time taken : ", duration)
 
 	if err != nil {
 		logrus.Error("Error commiting transaction : ", err)
