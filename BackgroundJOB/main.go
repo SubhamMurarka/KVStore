@@ -16,8 +16,8 @@ func init() {
 }
 
 func main() {
-	DBURL1 := "postgresql://user:password@localhost:5432/postgres"
-	DBURL2 := "postgresql://user:password@localhost:5434/postgres"
+	DBURL1 := "postgresql://user:password@postgres_primary:5432/postgres"
+	DBURL2 := "postgresql://user:password@postgres_primary_1:5432/postgres"
 
 	pgconn, err := pgx.Connect(context.Background(), DBURL1)
 	if err != nil {
