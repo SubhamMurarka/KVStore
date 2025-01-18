@@ -4,6 +4,9 @@ FROM golang:1.22.0-alpine
 # Set the working directory inside the container.
 WORKDIR /app
 
+# Install curl.
+RUN apk add --no-cache curl
+
 # Copy go.mod and go.sum files to the working directory.
 COPY go.mod go.sum ./
 

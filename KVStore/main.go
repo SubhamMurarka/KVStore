@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"net/http"
 	"strconv"
 
 	"github.com/SubhamMurarka/KVStore/handler"
@@ -20,13 +21,13 @@ var readPool []*pgxpool.Pool
 
 func main() {
 	DBShard1 := []string{
-		"postgresql://user:password@localhost:5432/postgres",
-		"postgresql://replicator:replicator_password@localhost:5433/postgres",
+		"postgresql://user:password@postgres_primary:5432/postgres",
+		"postgresql://replicator:replicator_password@postgres_replica:5432/postgres",
 	}
 
 	DBShard2 := []string{
-		"postgresql://user:password@localhost:5434/postgres",
-		"postgresql://replicator:replicator_password@localhost:5435/postgres",
+		"postgresql://user:password@postgres_primary_1:5432/postgres",
+		"postgresql://replicator:replicator_password@postgres_replica_1:5432/postgres",
 	}
 
 	// Configure primary (write) connection pool
@@ -47,6 +48,9 @@ func main() {
 	r.GET("/get", handle.Get)
 	r.DELETE("/delete", handle.Delete)
 	r.PATCH("/update", handle.Update)
+	r.GET("/health", func(c *gin.Context) {
+		c.JSON(http.StatusOK, gin.H{"response": "healthy"})
+	})
 	r.GET("/pool-stats:i", func(c *gin.Context) {
 		i, _ := strconv.Atoi(c.Param("i"))
 		c.JSON(200, gin.H{
